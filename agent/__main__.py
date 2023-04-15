@@ -1,9 +1,21 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../')
+import asyncio
+from argparse import Namespace
+from agent.args import parser
+from agent.chatglm_with_shared_memory_openai_llm import *
 
-from .chatglm_with_shared_memory_openai_llm import *
 
-if __name__ == "__main__":
-    # 创建 ChatglmWithSharedMemoryOpenaiLLM 类的实例
-    chatglm_instance = ChatglmWithSharedMemoryOpenaiLLM()
+async def dispatch(args: Namespace):
+    args_dict = vars(args)
+
+    # logger.info(f'Running in {args.mode} mode')
+    if args.mode == 'demo':
+        if not os.path.isfile(args.dialogue_path):
+            raise FileNotFoundError(f'Invalid dialogue file path for demo mode: "{args.dialogue_path}"')
+
+    chatglm_instance = ChatglmWithSharedMemoryOpenaiLLM(args_dict)
 
     # 使用代理链运行一些示例输入
     chatglm_instance.agent_chain.run(input="我跟露露聊了什么?")
@@ -16,3 +28,15 @@ if __name__ == "__main__":
     背景：游戏，通话，当下
     开篇需要以游戏相识你挑逗的话语讲起
     """)
+
+
+
+
+if __name__ == '__main__':
+    args = None
+    args = parser.parse_args()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(dispatch(args))
+
