@@ -9,7 +9,7 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain.document_loaders import TextLoader
 
-from .document_loaders import Dialogue, parse_dialogue, DialogueLoader
+from agent.document_loaders import Dialogue, parse_dialogue, DialogueLoader
 from models import ChatGLM
 import sentence_transformers
 from configs.model_config import *

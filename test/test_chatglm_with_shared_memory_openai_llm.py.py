@@ -3,10 +3,10 @@ import os
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../')
 
-from agent import ChatglmWithSharedMemoryOpenaiLLM
 import asyncio
 from argparse import Namespace
-from agent.args import parser
+from agent.chatglm_with_shared_memory_openai_llm import ChatglmWithSharedMemoryOpenaiLLM
+from agent.chatglm_with_shared_memory_openai_llm.args import parser
 
 
 
