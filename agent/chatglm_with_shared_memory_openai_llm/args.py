@@ -1,6 +1,5 @@
 import argparse
 import os
-from configs.model_config import *
 
 
 # Additional argparse types
@@ -39,11 +38,11 @@ parser.add_argument('-m', '--mode', default='demo', type=str, choices=['demo', '
                          'for a webserver (web_client) or batch translation mode (batch)')
 
 parser.add_argument('--use-cuda', action='store_true', help='Turn on/off cuda')
-parser.add_argument('--embedding-model', default=EMBEDDING_MODEL, type=str, choices=embedding_model_dict,
+parser.add_argument('--embedding-model', default="text2vec", type=str,
                     help='embedding_model')
 parser.add_argument('--vector-search-top-k', default=6, type=int, help='vector_search_top_k')
 
-parser.add_argument('--llm_model', default=LLM_MODEL, type=str, choices=llm_model_dict,
+parser.add_argument('--llm_model', default='', type=str,
                     help='LLM model')
 parser.add_argument('--llm-history-len', default=10, type=int, help='llm-history-len')
 parser.add_argument('--dialogue-path', default='', type=str, help='dialogue-path')
