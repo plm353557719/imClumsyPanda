@@ -35,7 +35,7 @@ class ChatglmWithSharedMemoryOpenaiLLM:
         self.dialogue = parse_dialogue(self.dialogue_path)
 
     def _init_cfg(self):
-        self.embeddings = HuggingFaceEmbeddings(model_name="/media/gpt4-pdf-chatbot-langchain/text2vec-large-chinese")
+        self.embeddings = HuggingFaceEmbeddings(model_name="GanymedeNil/text2vec-large-chinese")
         self.embeddings.client = sentence_transformers.SentenceTransformer(self.embeddings.model_name,
                                                                            device=self.device)
 
