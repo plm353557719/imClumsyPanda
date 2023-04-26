@@ -5,7 +5,7 @@ import asyncio
 from argparse import Namespace
 from agent.chatglm_with_shared_memory_openai_llm.args import parser
 from agent.chatglm_with_shared_memory_openai_llm.chatglm_with_shared_memory_openai_llm import *
-
+from langchain.llms import OpenAI
 
 async def dispatch(args: Namespace):
     args_dict = vars(args)
@@ -14,8 +14,8 @@ async def dispatch(args: Namespace):
     if args.mode == 'demo':
         if not os.path.isfile(args.dialogue_path):
             raise FileNotFoundError(f'Invalid dialogue file path for demo mode: "{args.dialogue_path}"')
-
-    chatglm_instance = ChatglmWithSharedMemoryOpenaiLLM(args_dict)
+    llm = OpenAI(temperature=0)
+    chatglm_instance = ChatglmWithSharedMemoryOpenaiLLM(llm_model=llm, params=args_dict)
 
     # 使用代理链运行一些示例输入
     chatglm_instance.agent_chain.run(input="你好，帮我看下我之前哪句话不合适")

@@ -7,13 +7,15 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
 
 from agent.document_loaders import parse_dialogue, DialogueLoader
-
+from langchain.llms.base import LLM
 import sentence_transformers
-from fastchat.api import FastChat
+
 
 class ChatglmWithSharedMemoryOpenaiLLM:
 
-    def __init__(self, params: dict = None):
+    def __init__(self, llm_model: LLM = None, params: dict = None):
+        self.llm = llm_model
+        self.embeddings = None
         params = params or {}
         self.embedding_model = params.get('embedding_model', 'text2vec')
         self.vector_search_top_k = params.get('vector_search_top_k', 6)
@@ -22,8 +24,8 @@ class ChatglmWithSharedMemoryOpenaiLLM:
         self.dialogue_path = params.get('dialogue_path', '')
         self.device = 'cuda' if params.get('use_cuda', False) else 'cpu'
 
-        self._load_scenario_dia()
         self._init_cfg()
+        self._load_scenario_dia()
         self._init_state_of_history()
         self.summry_chain, self.memory = self._agents_answer()
         self.agent_chain = self._create_agent_chain()
@@ -33,7 +35,7 @@ class ChatglmWithSharedMemoryOpenaiLLM:
         self.dialogue = parse_dialogue(self.dialogue_path)
 
     def _init_cfg(self):
-        self.embeddings = HuggingFaceEmbeddings(model_name="GanymedeNil/text2vec-large-chinese", )
+        self.embeddings = HuggingFaceEmbeddings(model_name="/media/gpt4-pdf-chatbot-langchain/text2vec-large-chinese")
         self.embeddings.client = sentence_transformers.SentenceTransformer(self.embeddings.model_name,
                                                                            device=self.device)
 
@@ -43,7 +45,7 @@ class ChatglmWithSharedMemoryOpenaiLLM:
         text_splitter = CharacterTextSplitter(chunk_size=3, chunk_overlap=1)
         texts = text_splitter.split_documents(documents)
         docsearch = Chroma.from_documents(texts, self.embeddings, collection_name="state-of-history")
-        self.state_of_history = RetrievalQA.from_chain_type(llm=FastChat(model_name="vicuna",temperature=0), chain_type="stuff",
+        self.state_of_history = RetrievalQA.from_chain_type(llm=self.llm, chain_type="stuff",
                                                             retriever=docsearch.as_retriever())
 
     def _agents_answer(self):
@@ -61,7 +63,7 @@ class ChatglmWithSharedMemoryOpenaiLLM:
         memory = ConversationBufferMemory(memory_key="chat_history")
         readonlymemory = ReadOnlySharedMemory(memory=memory)
         summry_chain = LLMChain(
-            llm=FastChat(model_name="vicuna",temperature=0),
+            llm=self.llm,
             prompt=prompt,
             verbose=True,
             memory=readonlymemory,  # use the read-only memory to prevent the tool from modifying the memory
@@ -97,7 +99,7 @@ class ChatglmWithSharedMemoryOpenaiLLM:
             input_variables=["input", "chat_history", "agent_scratchpad"]
         )
 
-        llm_chain = LLMChain(llm=FastChat(model_name="vicuna-13b", temperature=0), prompt=prompt)
+        llm_chain = LLMChain(llm=self.llm, prompt=prompt)
         agent = ZeroShotAgent(llm_chain=llm_chain, tools=tools, verbose=True)
         agent_chain = AgentExecutor.from_agent_and_tools(agent=agent, tools=tools, verbose=True, memory=self.memory)
 
