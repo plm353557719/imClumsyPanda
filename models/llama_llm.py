@@ -3,6 +3,7 @@ from abc import ABC
 from langchain.llms.base import LLM
 import random
 import torch
+import torch.nn as nn
 import transformers
 from transformers.generation.logits_process import LogitsProcessor
 from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaList
@@ -52,7 +53,6 @@ class LLamaLLM(BaseAnswer, LLM, ABC):
     min_length: int = 0
     logits_processor: LogitsProcessorList = None
     stopping_criteria: Optional[StoppingCriteriaList] = None
-    eos_token_id: Optional[int] = [2]
 
     state: object = {'max_new_tokens': 50,
                      'seed': 1,
@@ -116,74 +116,14 @@ class LLamaLLM(BaseAnswer, LLM, ABC):
         return Iteratorize(self.generate_with_callback, kwargs)
 
     # 将历史对话数组转换为文本格式
-    def history_to_text(self, query):
+    def history_to_text(self):
         formatted_history = ''
         history = self.history[-self.history_len:] if self.history_len > 0 else []
         for i, (old_query, response) in enumerate(history):
             formatted_history += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
-        formatted_history += "[Round {}]\n问：{}\n答：".format(len(history), query)
         return formatted_history
 
-    def prepare_inputs_for_generation(self,
-                                      input_ids: torch.LongTensor):
-        """
-        预生成注意力掩码和 输入序列中每个位置的索引的张量
-        # TODO 没有思路
-        :return:
-        """
-
-        mask_positions = torch.zeros((1, input_ids.shape[1]), dtype=input_ids.dtype).to(self.checkPoint.model.device)
-
-        attention_mask = self.get_masks(input_ids, input_ids.device)
-
-        position_ids = self.get_position_ids(
-            input_ids,
-            device=input_ids.device,
-            mask_positions=mask_positions
-        )
-
-        return input_ids, position_ids, attention_mask
-
-    def get_position_ids(self, input_ids: torch.LongTensor, mask_positions, device):
-        """
-        注意力偏移量
-        :param input_ids:
-        :param mask_positions:
-        :param device:
-        :param use_gmasks:
-        :return:
-        """
-        batch_size, seq_length = input_ids.shape
-        context_lengths = [seq.tolist().index(self.checkPoint.model_config.bos_token_id) for seq in input_ids]
-        position_ids = torch.arange(seq_length, dtype=torch.long, device=device).unsqueeze(0).repeat(batch_size, 1)
-        for i, context_length in enumerate(context_lengths):
-            position_ids[i, context_length:] = mask_positions[i]
-        block_position_ids = [torch.cat((
-            torch.zeros(context_length, dtype=torch.long, device=device),
-            torch.arange(seq_length - context_length, dtype=torch.long, device=device) + 1
-        )) for context_length in context_lengths]
-        block_position_ids = torch.stack(block_position_ids, dim=0)
-        position_ids = torch.stack((position_ids, block_position_ids), dim=1)
-        return position_ids
-
-    def get_masks(self, input_ids, device):
-        """
-        获取注意力掩码
-        :param input_ids:
-        :param device:
-        :return:
-        """
-        batch_size, seq_length = input_ids.shape
-        context_lengths = [seq.tolist().index(self.checkPoint.model_config.bos_token_id) for seq in input_ids]
-        attention_mask = torch.ones((batch_size, seq_length, seq_length), device=device)
-        attention_mask.tril_()
-        for i, context_length in enumerate(context_lengths):
-            attention_mask[i, :, :context_length] = 1
-        attention_mask.unsqueeze_(1)
-        attention_mask = (attention_mask < 0.5).bool()
-        return attention_mask
-
-    def generate_softprompt_history_tensors(self, query):
+    def generate_softprompt_history_tensors(self):
         """
         历史对话软提示
             这段代码首先定义了一个名为 history_to_text 的函数，用于将 self.history
@@ -194,7 +134,7 @@ class LLamaLLM(BaseAnswer, LLM, ABC):
 
         # 对话内容
         # 处理历史对话
-        formatted_history = self.history_to_text(query)
+        formatted_history = self.history_to_text()
         return formatted_history
 
     @property
@@ -206,10 +146,51 @@ class LLamaLLM(BaseAnswer, LLM, ABC):
 
     def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
         print(f"__call:{prompt}")
+        #  向量拼接
+        softprompt = self.generate_softprompt_history_tensors()
+        history = self.history[-self.history_len:] if self.history_len > 0 else []
+        softprompt += "[Round {}]\n问：{}\n答：".format(len(history), prompt)
+
+        softprompt_input_ids = self.checkPoint.tokenizer.encode(str(softprompt), return_tensors='pt')
+
+        input_ids = self.encode(prompt, add_bos_token=self.state['add_bos_token'], truncation_length=self.max_new_tokens)
+
+        # 全连接层,在矩阵相乘运算中，要求第一个矩阵的列数与第二个矩阵的行数相等
+        llm_proj = nn.Linear(
+            softprompt_input_ids.shape[1], self.checkPoint.model_config.hidden_size
+        )
+        # 确保数据类型匹配
+        softprompt_input_ids = softprompt_input_ids.to(torch.float32)
+        # 隐藏层输入
+        inputs_llm = llm_proj(softprompt_input_ids).to(self.checkPoint.llm_device)
+        # 隐藏层形状
+        atts_llm = torch.ones(inputs_llm.size()[:-1], dtype=torch.long).to(self.checkPoint.llm_device)
+
+        # 设置填充符、截止符、开始符号、
+        self.checkPoint.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        self.checkPoint.tokenizer.add_special_tokens({'bos_token': '</s>'})
+        self.checkPoint.tokenizer.add_special_tokens({'eos_token': '</s>'})
+        self.checkPoint.tokenizer.add_special_tokens({'unk_token': '</s>'})
+        llm_tokens = self.checkPoint.tokenizer(
+            prompt,
+            padding="longest",
+            return_tensors="pt"
+        ).to(self.checkPoint.llm_device)
+
+        # 输入
+        inputs_embeds = self.checkPoint.model.get_input_embeddings()(llm_tokens.input_ids)
+        # 输入张量形状对齐
+        inputs_llm_broadcasted = inputs_llm.unsqueeze(1).expand_as(inputs_embeds)
+        inputs_embeds = torch.cat([inputs_llm_broadcasted, inputs_embeds], dim=1)
+        # 输入掩码张量形状对齐
+        atts_llm_broadcasted = atts_llm.unsqueeze(1).expand_as(llm_tokens.attention_mask)
+        attention_mask = torch.cat([atts_llm_broadcasted, llm_tokens.attention_mask], dim=1)
+
         if self.logits_processor is None:
             self.logits_processor = LogitsProcessorList()
         self.logits_processor.append(InvalidScoreLogitsProcessor())
-
+        # Find the eos tokens
+        eos_token_ids = [self.checkPoint.tokenizer.eos_token_id] if self.checkPoint.tokenizer.eos_token_id is not None else []
         gen_kwargs = {
             "max_new_tokens": self.max_new_tokens,
             "num_beams": self.num_beams,
@@ -219,18 +200,13 @@ class LLamaLLM(BaseAnswer, LLM, ABC):
             "encoder_repetition_penalty": self.encoder_repetition_penalty,
             "min_length": self.min_length,
             "temperature": self.temperature,
-            "eos_token_id": self.eos_token_id,
+            "eos_token_id": eos_token_ids,
             "logits_processor": self.logits_processor}
 
-        #  向量拼接
-        input_ids = self.encode(prompt, add_bos_token=self.state['add_bos_token'], truncation_length=self.max_new_tokens)
-        # input_ids, position_ids, attention_mask = self.prepare_inputs_for_generation(input_ids=filler_input_ids)
-
         # 对话模型prompt
-        gen_kwargs.update({'inputs': input_ids})
+        gen_kwargs.update({'inputs_embeds': llm_tokens.input_ids})
         # 注意力掩码
-        # gen_kwargs.update({'attention_mask': attention_mask})
-        # gen_kwargs.update({'position_ids': position_ids})
+        gen_kwargs.update({'attention_mask': llm_tokens.attention_mask})
         if self.stopping_criteria is None:
             self.stopping_criteria = transformers.StoppingCriteriaList()
         # 观测输出
@@ -270,6 +246,9 @@ class LLamaLLM(BaseAnswer, LLM, ABC):
                 if new_tokens == self.max_new_tokens - 1 or stopped:
                     break
 
+                if output[-1] in eos_token_ids:
+                    break
+
         response = response_template['text']
         print(f"response:{response}")
         self.history = self.history + [[None, response]]
@@ -287,8 +266,8 @@ class LLamaLLM(BaseAnswer, LLM, ABC):
         listenerQueue = AnswerResultQueueSentinelTokenListenerQueue()
         self.stopping_criteria.append(listenerQueue)
         # TODO 需要实现chat对话模块和注意力模型，目前_call为langchain的LLM拓展的api，默认为无提示词模式，如果需要操作注意力模型，可以参考chat_glm的实现
-        softprompt = self.generate_softprompt_history_tensors(prompt)
-        response = self._call(prompt=softprompt, stop=['\n###'])
+
+        response = self._call(prompt=prompt, stop=['\n###'])
         answer_result = AnswerResult()
         answer_result.history = self.history
         if listenerQueue.listenerQueue.__len__() > 0:
